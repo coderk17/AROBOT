@@ -1,0 +1,84 @@
+# ARobot — independent services (bot + MCP report + optional ingest)
+# Usage:
+#   cp .env.example .env && edit .env
+#   docker compose up -d --build
+#   docker compose --profile tools run --rm ingest
+
+services:
+  mcp-report:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    image: arobot-mcp-report:latest
+    container_name: arobot-mcp-report
+    restart: unless-stopped
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      UPLOAD_DIR: /app/data/uploads
+    ports:
+      - "${MCP_REPORT_PORT:-8000}:8000"
+    volumes:
+      - arobot-data:/app/data
+    networks:
+      - arobot-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1',8000),2); s.close()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bot
+    image: arobot-bot:latest
+    container_name: arobot-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MCP_REPORT_URL: http://mcp-report:8000/mcp
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      DOCUMENTS_DIR: /app/data/documents
+      UPLOAD_DIR: /app/data/uploads
+    volumes:
+      - arobot-data:/app/data
+    depends_on:
+      mcp-report:
+        condition: service_healthy
+    networks:
+      - arobot-net
+
+  ingest:
+    profiles: ["tools"]
+    image: arobot-bot:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bot
+    env_file:
+      - .env
+    environment:
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      DOCUMENTS_DIR: /app/data/documents
+    volumes:
+      - arobot-data:/app/data
+    command: ["arobot-ingest", "/app/data/documents"]
+    networks:
+      - arobot-net
+
+volumes:
+  arobot-data:
+    driver: local
+
+networks:
+  arobot-net:
+    driver: bridge
